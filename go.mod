@@ -1,4 +1,4 @@
-module github.com/hashicorp/go-plugin
+module github.com/GoldenSHeep402/go-plugin
 
 go 1.17
 
