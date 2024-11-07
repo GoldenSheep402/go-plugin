@@ -4,6 +4,7 @@
 package cmdrunner
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -18,8 +19,6 @@ import (
 var (
 	_ runner.Runner = (*CmdRunner)(nil)
 
-	// ErrProcessNotFound is returned when a client is instantiated to
-	// reattach to an existing process and it isn't found.
 	ErrProcessNotFound = errors.New("Reattachment process not found")
 )
 
@@ -30,8 +29,6 @@ const unrecognizedRemotePluginMessage = `This usually means
   the plugin failed to negotiate the initial go-plugin protocol handshake
 %s`
 
-// CmdRunner implements the runner.Runner interface. It mostly just passes through
-// to exec.Cmd methods.
 type CmdRunner struct {
 	logger hclog.Logger
 	cmd    *exec.Cmd
@@ -39,8 +36,6 @@ type CmdRunner struct {
 	stdout io.ReadCloser
 	stderr io.ReadCloser
 
-	// Cmd info is persisted early, since the process information will be removed
-	// after Kill is called.
 	path string
 	pid  int
 
@@ -50,15 +45,19 @@ type CmdRunner struct {
 // NewCmdRunner returns an implementation of runner.Runner for running a plugin
 // as a subprocess. It must be passed a cmd that hasn't yet been started.
 func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd) (*CmdRunner, error) {
-	stdout, err := cmd.StdoutPipe()
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
 
-	stderr, err := cmd.StderrPipe()
+	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
 	}
+
+	bufferSize := 20 * 1024 * 1024
+	stdout := scannerToReadCloser(bufio.NewScanner(stdoutPipe), bufferSize)
+	stderr := scannerToReadCloser(bufio.NewScanner(stderrPipe), bufferSize)
 
 	return &CmdRunner{
 		logger: logger,
@@ -67,6 +66,26 @@ func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd) (*CmdRunner, error) {
 		stderr: stderr,
 		path:   cmd.Path,
 	}, nil
+}
+
+// scannerToReadCloser
+func scannerToReadCloser(scanner *bufio.Scanner, bufferSize int) io.ReadCloser {
+	pr, pw := io.Pipe()
+
+	scanner.Buffer(make([]byte, bufferSize), bufferSize)
+
+	go func() {
+		defer pw.Close()
+		for scanner.Scan() {
+			line := scanner.Text()
+			pw.Write([]byte(line + "\n"))
+		}
+		if err := scanner.Err(); err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+
+	return pr
 }
 
 func (c *CmdRunner) Start(_ context.Context) error {
@@ -112,16 +131,6 @@ func (c *CmdRunner) Name() string {
 
 func (c *CmdRunner) ID() string {
 	return fmt.Sprintf("%d", c.pid)
-}
-
-// peTypes is a list of Portable Executable (PE) machine types from https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
-// mapped to GOARCH types. It is not comprehensive, and only includes machine types that Go supports.
-var peTypes = map[uint16]string{
-	0x14c:  "386",
-	0x1c0:  "arm",
-	0x6264: "loong64",
-	0x8664: "amd64",
-	0xaa64: "arm64",
 }
 
 func (c *CmdRunner) Diagnose(_ context.Context) string {
