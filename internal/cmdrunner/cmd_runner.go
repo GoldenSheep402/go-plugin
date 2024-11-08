@@ -44,7 +44,7 @@ type CmdRunner struct {
 
 // NewCmdRunner returns an implementation of runner.Runner for running a plugin
 // as a subprocess. It must be passed a cmd that hasn't yet been started.
-func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd) (*CmdRunner, error) {
+func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd, bufSize ...int) (*CmdRunner, error) {
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -55,9 +55,14 @@ func NewCmdRunner(logger hclog.Logger, cmd *exec.Cmd) (*CmdRunner, error) {
 		return nil, err
 	}
 
-	bufferSize := 20 * 1024 * 1024
-	stdout := scannerToReadCloser(bufio.NewScanner(stdoutPipe), bufferSize)
-	stderr := scannerToReadCloser(bufio.NewScanner(stderrPipe), bufferSize)
+	var stdout, stderr io.ReadCloser
+	if len(bufSize) > 0 {
+		stdout = scannerToReadCloser(bufio.NewScanner(stdoutPipe), bufSize[0])
+		stderr = scannerToReadCloser(bufio.NewScanner(stderrPipe), bufSize[0])
+	} else {
+		stdout = scannerToReadCloser(bufio.NewScanner(stdoutPipe), 64*1024)
+		stderr = scannerToReadCloser(bufio.NewScanner(stderrPipe), 64*1024)
+	}
 
 	return &CmdRunner{
 		logger: logger,

@@ -76,6 +76,8 @@ var (
 // defaultPluginLogBufferSize is the default size of the buffer used to read from stderr for plugin log lines.
 const defaultPluginLogBufferSize = 64 * 1024
 
+const defaultPluginCmdBufferSize = 64 * 1024
+
 // Client handles the lifecycle of a plugin application. It launches
 // plugins, connects to them, dispenses interface implementations, and handles
 // killing the process.
@@ -163,6 +165,9 @@ type ClientConfig struct {
 	// that is already running. This isn't common.
 	Cmd      *exec.Cmd
 	Reattach *ReattachConfig
+
+	// CmdBufferSize is the buffer size(bytes) to read from stdout for plugin log lines.
+	CmdBufferSize int
 
 	// RunnerFunc allows consumers to provide their own implementation of
 	// runner.Runner and control the context within which a plugin is executed.
@@ -409,6 +414,10 @@ func NewClient(config *ClientConfig) (c *Client) {
 	}
 	if config.SyncStderr == nil {
 		config.SyncStderr = io.Discard
+	}
+
+	if config.CmdBufferSize == 0 {
+		config.CmdBufferSize = defaultPluginCmdBufferSize
 	}
 
 	if config.AllowedProtocols == nil {
@@ -723,7 +732,7 @@ func (c *Client) Start() (addr net.Addr, err error) {
 			return nil, err
 		}
 	default:
-		runner, err = cmdrunner.NewCmdRunner(c.logger, cmd)
+		runner, err = cmdrunner.NewCmdRunner(c.logger, cmd, c.config.CmdBufferSize)
 		if err != nil {
 			return nil, err
 		}
